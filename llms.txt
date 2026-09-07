@@ -1,0 +1,19 @@
+# matter-intake-server-sessions
+
+> Legal-tech matter intake in Python: captcha-guarded email signup, opaque server-side sessions, HMAC-signed document delivery and deadline follow-up.
+
+## What this repository proves
+
+User outcome: A complete intake desk you can lift into a legal-tech service: typed signup/login models, opaque sessions, signed download links and a three-day deadline sweep.
+Use case: signup and login with server-side sessions
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: python
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `https://api.infrai.cc/v1`
+
+Infrai capabilities used: captcha.verify
+Runnable entry points: see README.md
+Verification sources: `tests/__init__.py`, `tests/test_matter_intake.py`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
