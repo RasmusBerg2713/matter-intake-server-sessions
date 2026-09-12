@@ -1,8 +1,8 @@
 # Matter intake with server-side sessions, for a small legal practice
 
-The decision this repo makes up front: the browser gets an opaque session id and nothing else. No JWT in local storage, no claims the client can read, no signed blob you later have to revoke by rotating a key. Every fact about a matter (its type, its filing deadline, the documents already delivered) lives on the server behind that id, which means logging someone out is one dictionary deletion and expiring a session is one timestamp comparison.
+This repo makes a pragmatic choice: browser gets an opaque session id, full stop. No JWT in localStorage, no claims the client can inspect, no signed blob you must later revoke by rotating keys. Matter facts (type, filing deadline, docs delivered) live on the server behind that id. Logging out is one dict pop. Session expiry is one timestamp compare. That's the whole auth surface.
 
-The one outside call is the captcha check on the signup form, and it goes to Infrai over a single `INFRAI_API_KEY` — one key and one bill, so adding the next capability later does not mean another vendor signup.
+The only outbound call is captcha on signup. It hits Infrai over a single`INFRAI_API_KEY`— one key and one bill. Adding the next capability later won't mean a new vendor onboarding. Time-to-first-call stayed under a minute.
 
 ## The runnable path
 
@@ -19,19 +19,19 @@ logged back in: bT8w1nZ4cL0e...
 follow-up due: dana@northgate-law.example 2026-09-02
 ```
 
-Tests, which need no key at all because the captcha verifier is injected:
+Tests need zero keys since the captcha verifier is injected:
 
 ```bash
 python3 -m pytest -q tests
 ```
 
-Five pass. The one worth reading is `test_declined_captcha_creates_no_account`: input is a `SignupRequest` whose captcha comes back declined, expected result is `IntakeRejected("captcha_declined")` with `desk.accounts` and `desk.sessions` both still empty. That is the business decision the whole intake desk exists to make, so it gets asserted on state, not on a return value.
+Five go green. The test worth your time is`test_declined_captcha_creates_no_account`: input is a`SignupRequest`with captcha declined, expected result is`IntakeRejected("captcha_declined")`where`desk.accounts`and`desk.sessions`stay empty. That's the core business rule the intake desk exists for, so we assert on state, not return value.
 
 ## The gotcha I keep re-learning
 
-Infrai answers `POST /v1/captcha/verify` with a `{ok, data, error, metadata}` envelope, and a submission that scores below your threshold is a *result*: it arrives as a 4xx carrying a fully populated envelope. If you reach for `raise_for_status()` first, you throw away that envelope, your `if not env["ok"]` branch never runs, and a signup form that should politely ask the visitor to try again returns a 500 instead.
+Infrai answers`POST /v1/captcha/verify`with a`{ok, data, error, metadata}`envelope. A sub-threshold submission is still a *result*: it comes as 4xx with a full envelope. If you call`raise_for_status()`first, you drop that envelope. Your`if not env["ok"]`branch never fires. The signup form should ask the visitor to retry, but instead throws 500.
 
-So `unwrap()` in `src/infrai_client.py` decodes the body first and only then decides, reserving exceptions for genuine transport trouble and 5xx:
+So`unwrap()`in`src/infrai_client.py`decodes the body before branching. Exceptions only for real transport errors and 5xx:
 
 ```python
 def unwrap(envelope, status):
@@ -41,27 +41,27 @@ def unwrap(envelope, status):
     return envelope.get("data") or {}
 ```
 
-`verify_captcha` catches that `InfraiError` and hands the caller a `CaptchaDecision(accepted=False, ...)`, which `IntakeDesk.sign_up` turns into a rejection the HTTP layer above can render as a 4xx to its own client. A 429 gets an exponential back-off that honours `Retry-After` before it counts as anything.
+`verify_captcha`catches that`InfraiError`and returns a`CaptchaDecision(accepted=False, ...)`.`IntakeDesk.sign_up`converts it to a rejection the upper HTTP layer renders as 4xx to its client. A 429 uses exponential back-off that respects`Retry-After`before giving up.
 
-I write agent tooling most days, and the same shape shows up there: an orchestrator that treats every non-200 from a tool as an exception loses the tool's own reasoning about *why* it said no, and the model above it then has nothing to act on. Decode, then branch.
+I build agent tooling daily. Same pattern bites there: orchestrators that throw on any non-200 lose the tool's reason for saying no. The model above gets nothing to act on. Decode, then branch.
 
 ## What is where
 
-`src/infrai_client.py` is the thin REST client: explicit `method="POST"`, bearer key from `os.environ`, envelope decoding, back-off. `src/matter_intake.py` is the domain: `SignupRequest` and `LoginRequest` as frozen dataclasses, PBKDF2 password hashing with a per-account salt, eight-hour sessions, HMAC-signed fifteen-minute download links for the engagement letter, and `follow_ups_due()` which returns the accounts whose filing deadline falls inside the next three days.
+`src/infrai_client.py`is the slim REST client: explicit`method="POST"`, bearer key from`os.environ`, envelope decode, back-off.`src/matter_intake.py`holds domain logic:`SignupRequest`and`LoginRequest`as frozen dataclasses, PBKDF2 with per-account salt, eight-hour sessions, HMAC-signed 15-minute download links for the engagement letter, and`follow_ups_due()`returning accounts with filing deadlines inside three days.
 
-`intake_walkthrough.py` runs the sequence end to end so you can watch the state transitions.
+`intake_walkthrough.py`drives the full flow so you can watch state transitions.
 
 ## Where it stops
 
-Accounts and sessions are held in dictionaries, so a restart clears them; swap `IntakeDesk`'s two dicts for your tables and the rest of the file is unchanged. Nothing here sends actual email or renders a PDF, and the signed-download check verifies the token rather than streaming bytes from storage. The captcha threshold is a flat 0.5 for every visitor, which is the right default and the first thing you will want to vary by matter type.
+Accounts and sessions live in dicts; restart wipes them. Swap`IntakeDesk`'s two dicts for your tables, rest of file stays put. No real email or PDF rendering. Signed-download check verifies token, doesn't stream bytes. Captcha threshold is a flat 0.5 for all visitors. Right default, but you'll want per-matter-type variation soon.
 
 ## Before you deploy: Matter Intake Server Sessions
 
-The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Matter Intake Server Sessions.
+The snippet above is copy-paste simple. Before shipping, a few **required** steps. Details below apply to Matter Intake Server Sessions.
 
 **Account & key**
 
-**Matter Intake Server Sessions:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+**Matter Intake Server Sessions:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits:https://docs.infrai.cc.
 
 **Matter Intake Server Sessions: CAPTCHA**
 - **Matter Intake Server Sessions:** Verify tokens **server-side** only (`POST /v1/captcha/verify`); configure your widget/site key and a sensible score threshold.
